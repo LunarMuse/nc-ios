@@ -123,7 +123,8 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         }
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-            NCAutoUpload.shared.initAutoUpload(controller: nil, account: session.account) { num in
+            Task {
+                let num = await NCAutoUpload.shared.initAutoUpload(account: session.account)
                 NextcloudKit.shared.nkCommonInstance.writeLog("[INFO] Initialize Auto upload with \(num) uploads")
             }
         }
@@ -188,10 +189,10 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 
         if tableAccount.autoUploadStart {
             NextcloudKit.shared.nkCommonInstance.writeLog("[INFO] Auto upload: true")
-            if UIApplication.shared.backgroundRefreshStatus == .available {
-                NextcloudKit.shared.nkCommonInstance.writeLog("[INFO] Auto upload in background: true")
-            } else {
-                NextcloudKit.shared.nkCommonInstance.writeLog("[INFO] Auto upload in background: false")
+            let isBackgroundRefreshAvailable = UIApplication.shared.backgroundRefreshStatus == .available
+            NextcloudKit.shared.nkCommonInstance.writeLog("[INFO] Refresh task in background: \(isBackgroundRefreshAvailable)")
+            NCBackgroundLocationUploadManager.shared.checkLocationServiceIsActive { active in
+                NextcloudKit.shared.nkCommonInstance.writeLog("[INFO] Location service: \(active)")
             }
         } else {
             NextcloudKit.shared.nkCommonInstance.writeLog("[INFO] Auto upload: false")
@@ -200,9 +201,6 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         if let error = NCAccount().updateAppsShareAccounts() {
             NextcloudKit.shared.nkCommonInstance.writeLog("[ERROR] Create Apps share accounts \(error.localizedDescription)")
         }
-
-        appDelegate?.scheduleAppRefresh()
-        appDelegate?.scheduleAppProcessing()
 
         NCNetworking.shared.cancelAllQueue()
 
