@@ -29,7 +29,7 @@ import Alamofire
 extension NCCollectionViewCommon: UICollectionViewDelegate {
     func didSelectMetadata(_ metadata: tableMetadata, withOcIds: Bool) {
         if metadata.e2eEncrypted {
-            if NCCapabilities.shared.getCapabilities(account: metadata.account).capabilityE2EEEnabled {
+            if capabilities.e2EEEnabled {
                 if !NCKeychain().isEndToEndEnabled(account: metadata.account) {
                     let e2ee = NCEndToEndInitialize()
                     e2ee.delegate = self
@@ -62,10 +62,13 @@ extension NCCollectionViewCommon: UICollectionViewDelegate {
                 NCViewer().view(viewController: self, metadata: metadata, image: image)
 
             } else if NextcloudKit.shared.isNetworkReachable() {
-                let metadata = database.setMetadataSessionInWaitDownload(metadata: metadata,
-                                                                         session: NCNetworking.shared.sessionDownload,
-                                                                         selector: global.selectorLoadFileView,
-                                                                         sceneIdentifier: self.controller?.sceneIdentifier)
+                guard let  metadata = database.setMetadataSessionInWaitDownload(ocId: metadata.ocId,
+                                                                                session: self.netwoking.sessionDownload,
+                                                                                selector: global.selectorLoadFileView,
+                                                                                sceneIdentifier: self.controller?.sceneIdentifier) else {
+                    return
+                }
+
                 if metadata.name == "files" {
                     let hud = NCHud(self.tabBarController?.view)
                     var downloadRequest: DownloadRequest?
@@ -76,7 +79,7 @@ extension NCCollectionViewCommon: UICollectionViewDelegate {
                         }
                     }
 
-                    NCNetworking.shared.download(metadata: metadata) {
+                    self.netwoking.download(metadata: metadata) {
                     } requestHandler: { request in
                         downloadRequest = request
                     } progressHandler: { progress in
