@@ -77,7 +77,7 @@ extension NCCollectionViewCommon {
         // DETAILS
         //
         if NCNetworking.shared.isOnline,
-           !NCCapabilities.shared.disableSharesView(account: metadata.account) {
+           !(!capabilities.fileSharingApiEnabled && !capabilities.filesComments && capabilities.activity.isEmpty) {
             actions.append(
                 NCMenuAction(
                     title: NSLocalizedString("_details_", comment: ""),
@@ -149,7 +149,7 @@ extension NCCollectionViewCommon {
         if NCNetworking.shared.isOnline,
            !metadata.directory,
            metadata.canUnlock(as: metadata.userId),
-           !NCCapabilities.shared.getCapabilities(account: metadata.account).capabilityFilesLockVersion.isEmpty {
+           !capabilities.filesLockVersion.isEmpty {
             actions.append(NCMenuAction.lockUnlockFiles(shouldLock: !metadata.lock, metadatas: [metadata], order: 30, sender: sender))
         }
 
@@ -303,11 +303,12 @@ extension NCCollectionViewCommon {
                                                         error: .success)
                             }
                         } else {
-                            let metadata = self.database.setMetadataSessionInWaitDownload(metadata: metadata,
-                                                                                          session: NCNetworking.shared.sessionDownload,
-                                                                                          selector: NCGlobal.shared.selectorSaveAsScan,
-                                                                                          sceneIdentifier: sceneIdentifier)
-                            NCNetworking.shared.download(metadata: metadata)
+                            if let metadata = self.database.setMetadataSessionInWaitDownload(ocId: metadata.ocId,
+                                                                                             session: NCNetworking.shared.sessionDownload,
+                                                                                             selector: NCGlobal.shared.selectorSaveAsScan,
+                                                                                             sceneIdentifier: sceneIdentifier) {
+                                NCNetworking.shared.download(metadata: metadata)
+                            }
                         }
                     }
                 )
@@ -335,7 +336,7 @@ extension NCCollectionViewCommon {
         // COPY - MOVE
         //
         if metadata.isCopyableMovable {
-            actions.append(.moveOrCopyAction(selectedMetadatas: [metadata], viewController: self, order: 130, sender: sender))
+            actions.append(.moveOrCopyAction(selectedMetadatas: [metadata], account: metadata.account, viewController: self, order: 130, sender: sender))
         }
 
         //
@@ -359,12 +360,13 @@ extension NCCollectionViewCommon {
                                                         error: .success)
                             }
                         } else {
-                            let metadata = self.database.setMetadataSessionInWaitDownload(metadata: metadata,
-                                                                                          session: NCNetworking.shared.sessionDownload,
-                                                                                          selector: NCGlobal.shared.selectorLoadFileQuickLook,
-                                                                                          sceneIdentifier: sceneIdentifier)
-
-                            NCNetworking.shared.download(metadata: metadata)
+                            if let metadata = self.database.setMetadataSessionInWaitDownload(ocId: metadata.ocId,
+                                                                                             session: NCNetworking.shared.sessionDownload,
+                                                                                             selector: NCGlobal.shared.selectorLoadFileQuickLook,
+                                                                                             sceneIdentifier: sceneIdentifier) {
+                                
+                                NCNetworking.shared.download(metadata: metadata)
+                            }
                         }
                     }
                 )

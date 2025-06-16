@@ -32,11 +32,12 @@ extension NCViewer {
         var actions = [NCMenuAction]()
         let localFile = self.database.getTableLocalFile(predicate: NSPredicate(format: "ocId == %@", metadata.ocId))
         let isOffline = localFile?.offline == true
+        let capabilities = NCCapabilities.shared.getCapabilitiesBlocking(for: metadata.account)
 
         //
         // DETAIL
         //
-        if !NCCapabilities.shared.disableSharesView(account: metadata.account) {
+        if !(!capabilities.fileSharingApiEnabled && !capabilities.filesComments && capabilities.activity.isEmpty) {
             actions.append(
                 NCMenuAction(
                     title: NSLocalizedString("_details_", comment: ""),
@@ -138,11 +139,12 @@ extension NCViewer {
                                                         error: .success)
                             }
                         } else {
-                            let metadata = self.database.setMetadataSessionInWaitDownload(metadata: metadata,
+                            if let metadata = self.database.setMetadataSessionInWaitDownload(ocId: metadata.ocId,
                                                                                           session: NCNetworking.shared.sessionDownload,
                                                                                           selector: NCGlobal.shared.selectorSaveAsScan,
-                                                                                          sceneIdentifier: controller.sceneIdentifier)
-                            NCNetworking.shared.download(metadata: metadata)
+                                                                                          sceneIdentifier: controller.sceneIdentifier) {
+                                NCNetworking.shared.download(metadata: metadata)
+                            }
                         }
                     }
                 )
@@ -169,11 +171,12 @@ extension NCViewer {
                     icon: utility.loadImage(named: "iphone.circle", colors: [NCBrandColor.shared.iconImageColor]),
                     sender: sender,
                     action: { _ in
-                        let metadata = self.database.setMetadataSessionInWaitDownload(metadata: metadata,
-                                                                                      session: NCNetworking.shared.sessionDownload,
-                                                                                      selector: "",
-                                                                                      sceneIdentifier: controller.sceneIdentifier)
-                        NCNetworking.shared.download(metadata: metadata)
+                        if let metadata = self.database.setMetadataSessionInWaitDownload(ocId: metadata.ocId,
+                                                                                         session: NCNetworking.shared.sessionDownload,
+                                                                                         selector: "",
+                                                                                         sceneIdentifier: controller.sceneIdentifier) {
+                            NCNetworking.shared.download(metadata: metadata)
+                        }
                     }
                 )
             )
@@ -225,11 +228,12 @@ extension NCViewer {
                                                         error: .success)
                             }
                         } else {
-                            let metadata = self.database.setMetadataSessionInWaitDownload(metadata: metadata,
-                                                                                          session: NCNetworking.shared.sessionDownload,
-                                                                                          selector: NCGlobal.shared.selectorLoadFileQuickLook,
-                                                                                          sceneIdentifier: controller.sceneIdentifier)
-                            NCNetworking.shared.download(metadata: metadata)
+                            if let metadata = self.database.setMetadataSessionInWaitDownload(ocId: metadata.ocId,
+                                                                                             session: NCNetworking.shared.sessionDownload,
+                                                                                             selector: NCGlobal.shared.selectorLoadFileQuickLook,
+                                                                                             sceneIdentifier: controller.sceneIdentifier) {
+                                NCNetworking.shared.download(metadata: metadata)
+                            }
                         }
                     }
                 )

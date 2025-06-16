@@ -25,61 +25,52 @@ import UIKit
 import NextcloudKit
 
 extension NCNetworking {
-    func synchronization(account: String, serverUrl: String, add: Bool) async {
-        let startDate = Date()
+    internal func synchronization(account: String, serverUrl: String, metadatasInDownload: [tableMetadata]?) async {
         let showHiddenFiles = NCKeychain().getShowHiddenFiles(account: account)
-        let options = NKRequestOptions(timeout: 120, taskDescription: NCGlobal.shared.taskDescriptionSynchronization, queue: NextcloudKit.shared.nkCommonInstance.backgroundQueue)
+        let options = NKRequestOptions(timeout: 300, taskDescription: NCGlobal.shared.taskDescriptionSynchronization, queue: NextcloudKit.shared.nkCommonInstance.backgroundQueue)
         var metadatasDirectory: [tableMetadata] = []
         var metadatasDownload: [tableMetadata] = []
 
-        let results = await NextcloudKit.shared.readFileOrFolderAsync(serverUrlFileName: serverUrl, depth: "infinity", showHiddenFiles: showHiddenFiles, account: account, options: options)
-        guard account == results.account else {
-            return
-        }
+        nkLog(tag: self.global.logTagSync, emoji: .start, message: "Start read infinite folder: \(serverUrl)")
 
-        if !add {
-            if await self.database.getResultMetadataAsync(predicate: NSPredicate(format: "account == %@ AND sessionSelector == %@ AND (status == %d OR status == %d)",
-                                                                                 account,
-                                                                                 self.global.selectorSynchronizationOffline,
-                                                                                 self.global.metadataStatusWaitDownload,
-                                                                                 self.global.metadataStatusDownloading)) != nil {
-                return
-            }
-        }
+        let results = await NextcloudKit.shared.readFileOrFolderAsync(serverUrlFileName: serverUrl, depth: "infinity", showHiddenFiles: showHiddenFiles, account: account, options: options)
 
         if results.error == .success, let files = results.files {
+            nkLog(tag: self.global.logTagSync, emoji: .success, message: "Read infinite folder: \(serverUrl)")
+
             for file in files {
                 if file.directory {
                     metadatasDirectory.append(self.database.convertFileToMetadata(file, isDirectoryE2EE: false))
-                } else if await isSynchronizable(ocId: file.ocId, fileName: file.fileName, etag: file.etag) {
+                } else if await isFileDifferent(ocId: file.ocId, fileName: file.fileName, etag: file.etag, metadatasInDownload: metadatasInDownload) {
                     metadatasDownload.append(self.database.convertFileToMetadata(file, isDirectoryE2EE: false))
+                    nkLog(tag: self.global.logTagSync, emoji: .start, message: "File download: \(file.serverUrl)/\(file.fileName)")
                 }
             }
 
-            let diffDate = Date().timeIntervalSinceReferenceDate - startDate.timeIntervalSinceReferenceDate
-            NextcloudKit.shared.nkCommonInstance.writeLog("[INFO] Synchronization \(serverUrl) in \(diffDate)")
-
-            self.database.addMetadatas(metadatasDirectory, sync: false)
-            self.database.addDirectories(metadatas: metadatasDirectory, sync: false)
-            self.database.setMetadatasSessionInWaitDownload(metadatas: metadatasDownload,
-                                                            session: self.sessionDownloadBackground,
-                                                            selector: self.global.selectorSynchronizationOffline)
+            await self.database.addMetadatasAsync(metadatasDirectory)
+            await self.database.addDirectoriesAsync(metadatas: metadatasDirectory)
+            await self.database.setMetadatasSessionInWaitDownloadAsync(metadatas: metadatasDownload,
+                                                                       session: self.sessionDownloadBackground,
+                                                                       selector: self.global.selectorSynchronizationOffline)
             await self.database.setDirectorySynchronizationDateAsync(serverUrl: serverUrl, account: account)
         } else {
-            NextcloudKit.shared.nkCommonInstance.writeLog("[ERROR] Synchronization \(serverUrl), \(results.error.errorCode)")
+            nkLog(tag: self.global.logTagSync, emoji: .error, message: "Read infinite folder: \(serverUrl), error: \(results.error.errorCode)")
         }
 
+        nkLog(tag: self.global.logTagSync, emoji: .stop, message: "Stop read infinite folder: \(serverUrl)")
     }
 
-    func isSynchronizable(ocId: String, fileName: String, etag: String) async -> Bool {
-        if let metadata = await self.database.getMetadataFromOcIdAsync(ocId),
-           metadata.status == self.global.metadataStatusDownloading || metadata.status == self.global.metadataStatusWaitDownload {
+    internal func isFileDifferent(ocId: String, fileName: String, etag: String, metadatasInDownload: [tableMetadata]?) async -> Bool {
+        let match = metadatasInDownload?.contains { $0.ocId == ocId } ?? false
+        if match {
             return false
         }
 
         let localFile = await self.database.getTableLocalFileAsync(predicate: NSPredicate(format: "ocId == %@", ocId))
-        let needsSync = (localFile?.etag != etag) || (NCUtilityFileSystem().fileProviderStorageSize(ocId, fileNameView: fileName) == 0)
+        let fileNamePath = self.utilityFileSystem.getDirectoryProviderStorageOcId(ocId, fileNameView: fileName)
+        let size = await self.utilityFileSystem.fileSizeAsync(atPath: fileNamePath)
+        let isDifferent = (localFile?.etag != etag) || size == 0
 
-        return needsSync
+        return isDifferent
     }
 }

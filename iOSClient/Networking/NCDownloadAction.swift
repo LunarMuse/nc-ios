@@ -149,7 +149,7 @@ class NCDownloadAction: NSObject, UIDocumentInteractionControllerDelegate, NCSel
         } else if metadata.directory {
             database.setDirectory(serverUrl: serverUrl, offline: true, metadata: metadata)
             Task {
-                await NCNetworking.shared.synchronization(account: metadata.account, serverUrl: metadata.serverUrl, add: true)
+                await NCService().synchronize(account: metadata.account)
             }
         } else {
             var metadatasSynchronizationOffline: [tableMetadata] = []
@@ -209,14 +209,14 @@ class NCDownloadAction: NSObject, UIDocumentInteractionControllerDelegate, NCSel
                     NextcloudKit.shared.download(serverUrlFileName: serverUrlFileName, fileNameLocalPath: fileNameLocalPath, account: account, requestHandler: { request in
                         downloadRequest = request
                     }, taskHandler: { task in
-                        self.database.setMetadataSession(metadata: metadata,
+                        self.database.setMetadataSession(ocId: metadata.ocId,
                                                          sessionTaskIdentifier: task.taskIdentifier,
                                                          status: self.global.metadataStatusDownloading)
                     }, progressHandler: { progress in
                         hud.progress(progress.fractionCompleted)
                     }) { accountDownload, etag, _, _, _, _, error in
                         hud.dismiss()
-                        self.database.setMetadataSession(metadata: metadata,
+                        self.database.setMetadataSession(ocId: metadata.ocId,
                                                          session: "",
                                                          sessionTaskIdentifier: 0,
                                                          sessionError: "",
@@ -240,6 +240,8 @@ class NCDownloadAction: NSObject, UIDocumentInteractionControllerDelegate, NCSel
     func openShare(viewController: UIViewController, metadata: tableMetadata, page: NCBrandOptions.NCInfoPagingTab) {
         let serverUrlFileName = metadata.serverUrl + "/" + metadata.fileName
         var page = page
+        let capabilities = NCCapabilities.shared.getCapabilitiesBlocking(for: metadata.account)
+
 
         NCActivityIndicator.shared.start(backgroundView: viewController.view)
         NCNetworking.shared.readFile(serverUrlFileName: serverUrlFileName, account: metadata.account, queue: .main) { account, metadata, error in
@@ -254,7 +256,7 @@ class NCDownloadAction: NSObject, UIDocumentInteractionControllerDelegate, NCSel
                     pages.append(value)
                 }
 
-                if NCCapabilities.shared.getCapabilities(account: account).capabilityActivity.isEmpty, let idx = pages.firstIndex(of: .activity) {
+                if capabilities.activity.isEmpty, let idx = pages.firstIndex(of: .activity) {
                     pages.remove(at: idx)
                 }
                 if !metadata.isSharable(), let idx = pages.firstIndex(of: .sharing) {
@@ -302,10 +304,12 @@ class NCDownloadAction: NSObject, UIDocumentInteractionControllerDelegate, NCSel
         let processor = ParallelWorker(n: 5, titleKey: "_downloading_", totalTasks: downloadMetadata.count, controller: controller)
         for (metadata, url) in downloadMetadata {
             processor.execute { completion in
-                let metadata = self.database.setMetadataSessionInWaitDownload(metadata: metadata,
-                                                                              session: NCNetworking.shared.sessionDownload,
-                                                                              selector: "",
-                                                                              sceneIdentifier: controller.sceneIdentifier)
+                guard let metadata = self.database.setMetadataSessionInWaitDownload(ocId: metadata.ocId,
+                                                                                    session: NCNetworking.shared.sessionDownload,
+                                                                                    selector: "",
+                                                                                    sceneIdentifier: controller.sceneIdentifier) else {
+                    return completion()
+                }
 
                 NCNetworking.shared.download(metadata: metadata) {
                 } progressHandler: { progress in
@@ -413,7 +417,7 @@ class NCDownloadAction: NSObject, UIDocumentInteractionControllerDelegate, NCSel
                     processor.hud.progress(progress.fractionCompleted)
                     fractionCompleted = Float(progress.fractionCompleted)
                 }
-            } completionHandler: { account, ocId, etag, _, _, _, afError, error in
+            } completionHandler: { account, ocId, etag, _, _, _, error in
                 if error == .success && etag != nil && ocId != nil {
                     let toPath = self.utilityFileSystem.getDirectoryProviderStorageOcId(ocId!, fileNameView: fileName)
                     self.utilityFileSystem.moveFile(atPath: fileNameLocalPath, toPath: toPath)
@@ -421,8 +425,6 @@ class NCDownloadAction: NSObject, UIDocumentInteractionControllerDelegate, NCSel
                     NCNetworking.shared.notifyAllDelegates { delegate in
                         delegate.transferRequestData(serverUrl: serverUrl)
                     }
-                } else if afError?.isExplicitlyCancelledError ?? false {
-                    print("cancel")
                 } else {
                     NCContentPresenter().showError(error: error)
                 }
@@ -532,8 +534,10 @@ class NCDownloadAction: NSObject, UIDocumentInteractionControllerDelegate, NCSel
         let topViewController = navigationController?.topViewController as? NCSelect
         var listViewController = [NCSelect]()
         var copyItems: [tableMetadata] = []
+        let capabilities = NCCapabilities.shared.getCapabilitiesBlocking(for: controller?.account ?? "")
+
         for item in items {
-            if let fileNameError = FileNameValidator.checkFileName(item.fileNameView, account: controller?.account) {
+            if let fileNameError = FileNameValidator.checkFileName(item.fileNameView, account: controller?.account, capabilities: capabilities) {
                 controller?.present(UIAlertController.warning(message: "\(fileNameError.errorDescription) \(NSLocalizedString("_please_rename_file_", comment: ""))"), animated: true)
                 return
             }

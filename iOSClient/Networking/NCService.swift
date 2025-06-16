@@ -42,7 +42,7 @@ class NCService: NSObject {
         self.database.clearAllAvatarLoaded(sync: false)
         self.addInternalTypeIdentifier(account: account)
 
-        Task(priority: .background) {
+        Task(priority: .utility) {
             let result = await requestServerStatus(account: account, controller: controller)
             if result {
                 await requestServerCapabilities(account: account, controller: controller)
@@ -144,20 +144,16 @@ class NCService: NSObject {
 
     private func requestServerCapabilities(account: String, controller: NCMainTabBarController?) async {
         let resultsCapabilities = await NextcloudKit.shared.getCapabilitiesAsync(account: account)
-        guard resultsCapabilities.error == .success, let data = resultsCapabilities.responseData?.data else {
+        guard resultsCapabilities.error == .success,
+              let data = resultsCapabilities.responseData?.data,
+              let capabilities = resultsCapabilities.capabilities else {
             return
         }
 
-        data.printJson()
-
-        self.database.addCapabilitiesJSon(data, account: account, sync: false)
-
-        guard let capability = self.database.setCapabilities(account: account, data: data) else {
-            return
-        }
+        await self.database.addCapabilitiesAsync(data: data, account: account)
 
         // Recommendations
-        if !NCCapabilities.shared.getCapabilities(account: account).capabilityRecommendations {
+        if !capabilities.recommendations {
             self.database.deleteAllRecommendedFiles(account: account, sync: false)
         }
 
@@ -167,7 +163,7 @@ class NCService: NSObject {
         }
 
         // Text direct editor detail
-        if capability.capabilityServerVersionMajor >= NCGlobal.shared.nextcloudVersion18 {
+        if capabilities.serverVersionMajor >= NCGlobal.shared.nextcloudVersion18 {
             let results = await NextcloudKit.shared.textObtainEditorDetailsAsync(account: account)
             if results.error == .success {
                 self.database.addDirectEditing(account: account, editors: results.editors, creators: results.creators, sync: false)
@@ -175,7 +171,7 @@ class NCService: NSObject {
         }
 
         // External file Server
-        if capability.capabilityExternalSites {
+        if capabilities.externalSites {
             let results = await NextcloudKit.shared.getExternalSiteAsync(account: account)
             if results.error == .success {
                 self.database.deleteExternalSites(account: account, sync: false)
@@ -188,7 +184,7 @@ class NCService: NSObject {
         }
 
         // User Status
-        if capability.capabilityUserStatusEnabled {
+        if capabilities.userStatusEnabled {
             let results = await NextcloudKit.shared.getUserStatusAsync(account: account)
             if results.error == .success {
                 self.database.setAccountUserStatus(userStatusClearAt: results.clearAt,
@@ -203,7 +199,7 @@ class NCService: NSObject {
         }
 
         // Added UTI for Collabora
-        capability.capabilityRichDocumentsMimetypes.forEach { mimeType in
+        capabilities.richDocumentsMimetypes.forEach { mimeType in
             NextcloudKit.shared.nkCommonInstance.addInternalTypeIdentifier(typeIdentifier: mimeType, classFile: NKCommon.TypeClassFile.document.rawValue, editor: NCGlobal.shared.editorCollabora, iconName: NKCommon.TypeIconFile.document.rawValue, name: "document", account: account)
         }
 
@@ -222,6 +218,9 @@ class NCService: NSObject {
 
     func synchronize(account: String) async {
         let showHiddenFiles = NCKeychain().getShowHiddenFiles(account: account)
+
+        nkLog(tag: self.global.logTagSync, emoji: .start, message: "Synchronize favorite for account: \(account)")
+
         let resultsFavorite = await NextcloudKit.shared.listingFavoritesAsync(showHiddenFiles: showHiddenFiles, account: account)
         if resultsFavorite.error == .success, let files = resultsFavorite.files {
             let resultsMetadatas = await self.database.convertFilesToMetadatasAsync(files, useFirstAsMetadataFolder: false)
@@ -230,20 +229,23 @@ class NCService: NSObject {
             }
         }
 
+        // file already in dowloading
+        let metadatasInDownload = await self.database.getMetadatasAsync(predicate: NSPredicate(format: "account == %@ AND status == %d", account, self.global.metadataStatusDownloadingAllMode), limit: nil)
+
         // Synchronize Directory
         let directories = await self.database.getTablesDirectoryAsync(predicate: NSPredicate(format: "account == %@ AND offline == true", account), sorted: "serverUrl", ascending: true)
         for directory in directories {
-            await NCNetworking.shared.synchronization(account: account, serverUrl: directory.serverUrl, add: false)
+            await NCNetworking.shared.synchronization(account: account, serverUrl: directory.serverUrl, metadatasInDownload: metadatasInDownload)
         }
 
         // Synchronize Files
         let files = await self.database.getTableLocalFilesAsync(predicate: NSPredicate(format: "account == %@ AND offline == true", account), sorted: "fileName", ascending: true)
         for file in files {
             if let metadata = await self.database.getMetadataFromOcIdAsync(file.ocId),
-               await NCNetworking.shared.isSynchronizable(ocId: metadata.ocId, fileName: metadata.fileName, etag: metadata.etag) {
-                self.database.setMetadataSessionInWaitDownload(metadata: metadata,
-                                                               session: NCNetworking.shared.sessionDownloadBackground,
-                                                               selector: NCGlobal.shared.selectorSynchronizationOffline)
+               await NCNetworking.shared.isFileDifferent(ocId: metadata.ocId, fileName: metadata.fileName, etag: metadata.etag, metadatasInDownload: metadatasInDownload) {
+                await self.database.setMetadataSessionInWaitDownloadAsync(ocId: metadata.ocId,
+                                                                          session: NCNetworking.shared.sessionDownloadBackground,
+                                                                          selector: NCGlobal.shared.selectorSynchronizationOffline)
             }
         }
     }
@@ -251,7 +253,8 @@ class NCService: NSObject {
     // MARK: -
 
     func sendClientDiagnosticsRemoteOperation(account: String) async {
-        guard NCCapabilities.shared.getCapabilities(account: account).capabilitySecurityGuardDiagnostics,
+        let capabilities = await NCCapabilities.shared.getCapabilitiesAsync(for: account)
+        guard capabilities.securityGuardDiagnostics,
               self.database.existsDiagnostics(account: account) else {
             return
         }
